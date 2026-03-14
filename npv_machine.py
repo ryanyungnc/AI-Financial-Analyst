@@ -1,5 +1,6 @@
 import os
 import json
+import sys
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -12,7 +13,7 @@ class YearCashFlow(BaseModel):
     amount: float = Field(description = "The cash flow amount for the year")
 
 class CashFlowData(BaseModel):
-    discount_rate: float = Field(description = "The numerical proportion of the cost of capital (e.g., 0.10 for 10%)")
+    discount_rate: float = Field(default = 0.1, description = "The numerical proportion of the cost of capital (e.g., 0.10 for 10%)")
     cash_flows: list[YearCashFlow] = Field(description = "List of cash for finite years.")
     perpetuity: bool = Field(description = "True if perpetuity, else false")
     perpetuity_gr: float = Field(default = 0.0, description = "Growth rate if perpetuity w growth, else 0.0")
@@ -44,18 +45,48 @@ def text_analysis(file_path):
     #Return parsed data
     return response.parsed
 
-def calculate_npv(discount_rate, cash_flows, perpetuity, perpetuity_gr):
-    
+def calculate_npv(data):
+    #Intialize
+    total = 0.0
+    r = data.discount_rate
+
+    #Calculate NPV of finite cash flows
+    for cf in data.cash_flows:
+        total += cf.amount / ((1 + r) ** cf.year)
+
+    #Calculate value of perpetuity, if any
+    if(data.perpetuity):
+        #Safety check: g must be less than r
+        if (data.perpetuity_gr >= r):
+            print("Warning: Growth rate >= discount rate. Perpetuity value is undefined.")
+            return total
+
+        last_cf = data.cash_flows[-1]
+        n = last_cf.year
+        g = data.perpetuity_gr
+
+        #Calculate value of first CF after finite series
+        next_cf_amount = last_cf.amount * (1 + g)
+
+        #Calculate value of entire perpetuity
+        whole_perpetuity_value = next_cf_amount / (r - g)
+
+        #Discount back to year 0
+        total += whole_perpetuity_value / ((1 + r) ** n)
+
+    return total
+
 
 
 
 if __name__ == "__main__":
-    target = "testing/ex2.txt"
-    print(f"Hello World! Extracting CF data from {target}...")
+    target = "testing/ex1.txt"
+    print(f"Extracting CF data from {target}...")
 
+    #Data parsing
     data = text_analysis(target)
     if data:
-        print(f"Discount Rate: {data.discount_rate}")
+        print(f"====\nDiscount Rate: {data.discount_rate}")
         print(f"Finite Cash Flows:")
         for cf in data.cash_flows:
             print(f"    Year {cf.year}: ${cf.amount:,.2f}")
@@ -66,4 +97,10 @@ if __name__ == "__main__":
             print("Not a perpetuity")
     else:
         print("Failed to extract data.")
+        sys.exit(1)
+
+    #NPV data
+    npv = calculate_npv(data)
+    print(f"====\n Project NPV: ${npv:,.2f}")
+
     

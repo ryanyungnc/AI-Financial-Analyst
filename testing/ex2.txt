@@ -1,0 +1,5 @@
+You work for a pharmaceutical company that has developed a new drug. The patent on the drug
+will last 17 years. You expect that the drug’s profits will be $2 million in its first year and that this
+amount will grow at a rate of 5% per year for the next 17 years. Once the patent expires, other
+pharmaceutical companies will be able to produce the same drug and competition will likely drive
+profits to zero. What is the present value of the new drug if the interest rate is 10% per year?

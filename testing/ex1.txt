@@ -1,0 +1,5 @@
+Your buddy in mechanical engineering has invented a money machine. The main drawback of the
+machine is that it is slow. It takes one year to manufacture $100. However, once built, the machine
+will last forever and will require no maintenance. The machine can be built immediately, but it will
+cost $1000 to build. Your buddy wants to know if he should invest the money to construct it. If the
+interest rate is 9.5% per year, what should your buddy do?

@@ -3,6 +3,8 @@ import json
 import sys
 import math
 import numpy_financial as npf
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from scipy.optimize import brentq
 from google import genai
 from google.genai import types
@@ -18,9 +20,13 @@ class YearCashFlow(BaseModel):
 class CashFlowData(BaseModel):
     discount_rate: float = Field(default = 0.1, description = "The numerical proportion of the cost of capital (e.g., 0.10 for 10%)")
     cash_flows: list[YearCashFlow] = Field(description = "List of cash for finite years.")
-    perpetuity: bool = Field(description = "True if perpetuity, else false")
+    perpetuity_amount: float = Field(default=0.0, description="The amount that continues forever AFTER the finite years end.")
     perpetuity_gr: float = Field(default = 0.0, description = "Growth rate if perpetuity w growth, else 0.0")
 
+class StrategicAdvice(BaseModel):
+    verdict: str = Field(description="A single 'Yes, you should undertake this investment' or 'No, you shouldn't undertake this investment' sentence with brief reasoning.")
+    deep_dive: str = Field(description="A detailed paragraph explaining the financial justification.")
+    suggestions: list[str] = Field(description="A list of 3 strings. Each must start with a bolded title sentence followed by reasoning.")
 
 def text_analysis(file_path):
     #Initalize client
@@ -37,7 +43,15 @@ def text_analysis(file_path):
     response = client.models.generate_content(
         model = "gemini-3.1-flash-lite-preview",
         config = types.GenerateContentConfig(
-            system_instruction = "You are a financial analyst assistant. Extract cash flow data from the user's message, calculating for finite years and extracting perpetuity data for infinite years.",
+            system_instruction = """
+                                    You are a financial data extractor. 
+                                    1. Identify the 'Initial Investment' (Year 0).
+                                    2. For recurring flows, calculate the NET flow per year. 
+                                    (e.g., $1M profit - $100k support = $900k net flow).
+                                    3. If 'in perpetuity' is mentioned, set perpetuity=True and 
+                                    set perpetuity_gr=0 unless a growth rate is specified.
+                                    4. Output ONLY the resulting JSON.
+                                    """,
             response_mime_type = "application/json",
             response_schema = CashFlowData,
             temperature = 0.1
@@ -215,19 +229,30 @@ def get_strategic_advice(data, results):
     pb_d_str = f"{results['payback_d']:.2f}" if results['payback_d'] is not None else "N/A"
 
     context = (
-        f"Analyze this investment: NPV=${results['npv']:,.2f}, "
+        f"Analyze this investment for our firm: NPV=${results['npv']:,.2f}, "
         f"IRR={irr_str}, "
         f"Discounted Payback={pb_d_str} years, "
         f"Discount rate={data.discount_rate}. "
-        "Should we undertake this investment? Undertake this problem from the perspective of the firm as if you are part of the team. Give me a 'Yes/No verdict and 3 bullet points for improvement."
+        "Provide a structured executive summary."
     )
 
     response = client.models.generate_content(
         model = "gemini-3.1-flash-lite-preview",
+        config=types.GenerateContentConfig(
+            system_instruction=(
+                "You are a Senior Financial Controller. Provide advice in three parts: "
+                "1. A clear Verdict (Yes/No + reason). "
+                "2. A Deep Dive analysis into the risk and return. "
+                "3. Three actionable suggestions. Format each suggestion as: "
+                "Title Sentence. Reasoning text."
+            ),
+            response_mime_type="application/json",
+            response_schema=StrategicAdvice,
+        ),
         contents=context
     )
 
-    return response.text
+    return response.parsed
 
 
 
@@ -289,6 +314,64 @@ if __name__ == "__main__":
     advice = get_strategic_advice(data, results)
     print(advice)
 
-    
 
-    
+
+#FastAPI Integration
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Change to site address later
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class AnalysisRequest(BaseModel):
+    text: str
+
+@app.post("/calculate")
+async def handle_analysis(request: AnalysisRequest):
+    try:
+        #Conversion to text file for function
+        with open("temp_input.txt", "w") as f:
+            f.write(request.text)
+        
+        data = text_analysis("temp_input.txt")
+
+        if not data:
+            raise HTTPException(status_code=400, detail="Could not extract data.")
+
+        #Function calculations
+        npv = calculate_npv(data)
+        irr = calculate_irr(data)
+        pi = calculate_pi(data)
+        pb_s, pb_d = calculate_payback_periods(data)
+        
+        results = {
+            "npv": npv,
+            "irr": irr,
+            "pi": pi,
+            "payback_s": pb_s,
+            "payback_d": pb_d
+        }
+
+        # Get the strategic advice
+        advice_obj = get_strategic_advice(data, results)
+
+        # Return everything as JSON to Next.js
+        return {
+            "npv": npv,
+            "irr": irr,
+            "pi": pi,
+            "payback_period_s": pb_s,
+            "payback_period_d": pb_d,
+            "advice": advice_obj.model_dump(),
+            "raw_cash_flows": [cf.model_dump() for cf in data.cash_flows],
+            "is_perpetuity": data.perpetuity
+        }
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Run it with: uvicorn npv_machine:app --reload

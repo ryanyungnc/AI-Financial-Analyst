@@ -40,21 +40,66 @@ app.add_middleware(
 async def health_check():
     return {"status": "AI Server is Online", "projects": ["NPV Analyst", "Concise"]}
 
-# --- CONCISE ENDPOINTS ---
+
 @app.get("/concise/start")
 async def start_game():
-    # Call your function from your other file
-    from concise_logic import initialize_concise 
-    return initialize_concise()
+    try:
+        from concise import initialize_concise 
+        problem_set = initialize_concise()
+        return problem_set
+    except Exception as e:
+        print(f"Error in start_game: {e}") 
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/concise/grade")
 async def grade_sentence(request: GradeRequest):
-    from concise_logic import give_feedback
-    return give_feedback(request.problem, request.edited_sentence)
+    try:
+        from concise import give_feedback
+        feedback = give_feedback(request.problem, request.edited_sentence)
+        return feedback
+    except Exception as e:
+        print(f"Error in grade_sentence: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# --- NPV ENDPOINTS ---
 @app.post("/npv/calculate")
 async def handle_npv(request: AnalysisRequest):
-    from npv_logic import text_analysis, calculate_npv, get_strategic_advice
-    # ... your NPV logic here ...
-    return {"status": "success"}
+    try:
+        from npv_machine import (
+            text_analysis, 
+            calculate_npv, 
+            calculate_irr, 
+            calculate_pi, 
+            calculate_payback_periods, 
+            get_strategic_advice
+        )
+
+        with open("temp_input.txt", "w") as f:
+            f.write(request.text)
+        
+        data = text_analysis("temp_input.txt")
+        if not data:
+            raise HTTPException(status_code=400, detail="Could not extract data.")
+
+        results = {
+            "npv": calculate_npv(data),
+            "irr": calculate_irr(data),
+            "pi": calculate_pi(data),
+            "payback_s": calculate_payback_periods(data)[0],
+            "payback_d": calculate_payback_periods(data)[1]
+        }
+
+        advice_obj = get_strategic_advice(data, results)
+
+        return {
+            "npv": results["npv"],
+            "irr": results["irr"],
+            "pi": results["pi"],
+            "payback_period_s": results["payback_s"],
+            "payback_period_d": results["payback_d"],
+            "advice": advice_obj.model_dump(),
+            "raw_cash_flows": [cf.model_dump() for cf in data.cash_flows],
+            "is_perpetuity": data.is_perpetuity
+        }
+    except Exception as e:
+        print(f"NPV Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

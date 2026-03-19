@@ -1,5 +1,1 @@
-Innovation Company is thinking about marketing a new software product. Upfront costs to market
-and develop the product are $5 million. The product is expected to generate profits of $1 million
-per year for 10 years. The company will have to provide product support expected to cost $100,000
-per year in perpetuity. Assume all profits and expenses occur at the end of the year.
-a. What is the NPV of this investment if the cost of capital is 6%?
+We are planning to build a new manufacturing facility at a cost of $10,000,000 today. Once operational, we expect the facility to generate $3,000,000 in profit at the end of each year for 5 years. At the end of Year 5, we will need to decommission the facility at a cost of $4,000,000. We are using a 10% discount rate for this project.

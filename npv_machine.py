@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 load_dotenv()
+client = genai.Client(api_key = os.getenv("GEMINI_API_KEY"))
+
 
 class YearCashFlow(BaseModel):
     year: int = Field(description = "The year number.")
@@ -20,18 +22,16 @@ class YearCashFlow(BaseModel):
 class CashFlowData(BaseModel):
     discount_rate: float = Field(default = 0.1, description = "The numerical proportion of the cost of capital (e.g., 0.10 for 10%)")
     cash_flows: list[YearCashFlow] = Field(description = "List of cash for finite years.")
+    is_perpetuity: bool = Field(default=False)
     perpetuity_amount: float = Field(default=0.0, description="The amount that continues forever AFTER the finite years end.")
     perpetuity_gr: float = Field(default = 0.0, description = "Growth rate if perpetuity w growth, else 0.0")
 
 class StrategicAdvice(BaseModel):
     verdict: str = Field(description="A single 'Yes, you should undertake this investment' or 'No, you shouldn't undertake this investment' sentence with brief reasoning.")
     deep_dive: str = Field(description="A detailed paragraph explaining the financial justification.")
-    suggestions: list[str] = Field(description="A list of 3 strings. Each must start with a bolded title sentence followed by reasoning.")
+    suggestions: list[str] = Field(description="A list of 3 strings. Each starts with a 5-15 word bolded title sentence with the recomendation followed by 2 unbolded sentences elaborating on the reasoning.")
 
 def text_analysis(file_path):
-    #Initalize client
-    client = genai.Client(api_key = os.getenv("GEMINI_API_KEY"))
-
     #Read message information
     try:
         with open(file_path, 'r', encoding='utf-8') as file:
@@ -44,13 +44,25 @@ def text_analysis(file_path):
         model = "gemini-3.1-flash-lite-preview",
         config = types.GenerateContentConfig(
             system_instruction = """
-                                    You are a financial data extractor. 
-                                    1. Identify the 'Initial Investment' (Year 0).
-                                    2. For recurring flows, calculate the NET flow per year. 
-                                    (e.g., $1M profit - $100k support = $900k net flow).
-                                    3. If 'in perpetuity' is mentioned, set perpetuity=True and 
-                                    set perpetuity_gr=0 unless a growth rate is specified.
-                                    4. Output ONLY the resulting JSON.
+                                    You are a financial data extractor.
+
+                                    CRITICAL TIMING RULES:
+                                    - Costs paid today = Year 0
+                                    - If construction takes 1 year, Year 1 cash flow = $0 (plant not yet operational)
+                                    - First operating cash flow begins the year AFTER construction completes
+                                    - '20 years after completion' with completion at Year 1 means operations Year 2-21, shutdown Year 22
+
+                                    CRITICAL AMOUNT RULES:
+                                    - NEVER net two cash flows that occur in the same year
+                                    - If a final operating payment AND a shutdown cost both occur at Year 22,
+                                    create TWO separate entries and sum them: (15000000) + (-200000000) = -185000000
+                                    OR represent as one entry: {year: 22, amount: -185000000}
+                                    - Shutdown/cleanup costs are ALWAYS their own cash flow, never merged silently
+                                    -If a shutdown cost and operating payment occur in the same year, 
+                                    the year's cash flow = operating + shutdown (e.g. 15M + (-200M) = -185M). 
+                                    The shutdown cost itself must always be a round number as stated in the problem.
+
+                                    Output ONLY the resulting JSON.
                                     """,
             response_mime_type = "application/json",
             response_schema = CashFlowData,
@@ -72,12 +84,12 @@ def calculate_npv(data):
         total += cf.amount / ((1 + r) ** cf.year)
 
     #Calculate value of perpetuity, if any
-    if(data.perpetuity):
-        #Calculate value of entire perpetuity
-        whole_perpetuity_value = calculate_perpetuity_cf(data, r)
+    if(data.is_perpetuity):
+        last_year = data.cash_flows[-1].year
+        terminal_value = calculate_perpetuity_cf(data, r)
 
-        #Discount back to year 0
-        total += whole_perpetuity_value / ((1 + r) ** data.cash_flows[-1].year)
+        #Discount back to year 0 and add
+        total += terminal_value / ((1 + r) ** last_year)
 
     return total
 
@@ -91,7 +103,7 @@ def calculate_irr(data):
         cf_list[cf.year] = cf.amount
     
     #Perpetuity case
-    if (data.perpetuity):
+    if (data.is_perpetuity):
         def npv_at_rate(r):
             if r <= data.perpetuity_gr:
                 return float('inf')
@@ -127,7 +139,7 @@ def calculate_pi(data):
             pv_outflows += abs(pv)
 
     #Handle perpetuity inflows
-    if data.perpetuity:
+    if data.is_perpetuity:
         term_val = calculate_perpetuity_cf(data, r)
         pv_term_val = term_val / ((1 + r) ** data.cash_flows[-1].year)
         if pv_term_val > 0:
@@ -166,11 +178,12 @@ def calculate_payback_periods(data):
             payback_discounted = cf.year
     
     #If not paid back yet and perpetuity
-    if data.perpetuity:
-        last_year = data.cash_flows[-1].year
-        perp_cf = sorted_cfs[-1].amount
+    if data.is_perpetuity:
+        last_year = sorted_cfs[-1].year  
+
+        perp_cf = data.perpetuity_amount if data.perpetuity_amount > 0 else sorted_cfs[-1].amount
         g = data.perpetuity_gr
-        c = perp_cf * (1 + g)
+        c = perp_cf * (1 + g)  # first perpetuity payment
 
         if payback_simple is None and perp_cf > 0:
             target = abs(simple_balance)
@@ -179,18 +192,23 @@ def calculate_payback_periods(data):
                 extra_years = target / perp_cf
             else:
                 val_to_log = (target * g / perp_cf) + 1
-                extra_years = math.log(val_to_log) / math.log(1 + g)
-            
-            payback_simple = last_year + extra_years
+                
+                if val_to_log <= 0:
+                    payback_simple = None
+                else:
+                    extra_years = math.log(val_to_log) / math.log(1 + g)
+                    payback_simple = last_year + extra_years
+
+            if g == 0:
+                payback_simple = last_year + extra_years
 
         if payback_discounted is None and r > g:
             target = abs(discounted_balance)
             target_at_last_year = target * ((1 + r) ** last_year)
 
-            #Logic check that payments grow faster than debt
             factor = (target_at_last_year * (r - g)) / c
 
-            if factor < 1:
+            if 0 < factor < 1:
                 numerator = math.log(1 - factor)
                 denominator = math.log((1 + g) / (1 + r))
                 payback_discounted = last_year + (numerator / denominator)
@@ -199,19 +217,16 @@ def calculate_payback_periods(data):
 
 
 def calculate_perpetuity_cf(data, r):
-    #Safety check: g must be less than r
-    if (data.perpetuity_gr >= r):
-        print("Warning: Growth rate >= discount rate. Perpetuity value is undefined.")
-        return 0.0
-
-    last_cf = data.cash_flows[-1]
     g = data.perpetuity_gr
-
-    #Calculate value of first CF after finite series
-    next_cf_amount = last_cf.amount * (1 + g)
-
-    #Return CF value of entire perpetuity
-    return (next_cf_amount / (r - g))
+    if g >= r:
+        return 0.0
+    
+    # Use the explicit amount if provided, otherwise fallback to last_cf
+    base_amount = data.perpetuity_amount if data.perpetuity_amount > 0 else data.cash_flows[-1].amount
+    
+    # Perpetuity formula: Next Year's Flow / (r - g)
+    next_year_cf = base_amount * (1 + g)
+    return next_year_cf / (r - g)
 
 def calculate_terminal_value(data, r):
     if data.perpetuity_gr >= r:
@@ -223,8 +238,6 @@ def calculate_terminal_value(data, r):
     return next_cf_amount / (r - data.perpetuity_gr)
 
 def get_strategic_advice(data, results):
-    client = genai.Client(api_key = os.getenv("GEMINI_API_KEY"))
-
     irr_str = f"{results['irr']:.2%}" if results['irr'] is not None else "N/A"
     pb_d_str = f"{results['payback_d']:.2f}" if results['payback_d'] is not None else "N/A"
 
@@ -244,7 +257,7 @@ def get_strategic_advice(data, results):
                 "1. A clear Verdict (Yes/No + reason). "
                 "2. A Deep Dive analysis into the risk and return. "
                 "3. Three actionable suggestions. Format each suggestion as: "
-                "Title Sentence. Reasoning text."
+                "Title Sentence. Reasoning text. They will be plain text, no puctuation like astericks"
             ),
             response_mime_type="application/json",
             response_schema=StrategicAdvice,
@@ -269,7 +282,7 @@ if __name__ == "__main__":
         for cf in data.cash_flows:
             print(f"    Year {cf.year}: ${cf.amount:,.2f}")
         
-        if(data.perpetuity == True):
+        if(data.is_perpetuity == True):
             print(f"This is a perpetuity with growth rate: {data.perpetuity_gr}")
         else:
             print("Not a perpetuity")
@@ -368,7 +381,7 @@ async def handle_analysis(request: AnalysisRequest):
             "payback_period_d": pb_d,
             "advice": advice_obj.model_dump(),
             "raw_cash_flows": [cf.model_dump() for cf in data.cash_flows],
-            "is_perpetuity": data.perpetuity
+            "is_perpetuity": data.is_perpetuity
         }
     except Exception as e:
         print(f"Error: {e}")

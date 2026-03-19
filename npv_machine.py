@@ -343,6 +343,7 @@ app.add_middleware(
 class AnalysisRequest(BaseModel):
     text: str
 
+
 @app.post("/calculate")
 async def handle_analysis(request: AnalysisRequest):
     try:

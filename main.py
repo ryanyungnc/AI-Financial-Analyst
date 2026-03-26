@@ -3,8 +3,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# --- 1. ALL MODELS (Blueprints) ---
-
 # NPV Models
 class YearCashFlow(BaseModel):
     year: int
@@ -23,19 +21,15 @@ class GradeRequest(BaseModel):
     problem: Problem
     edited_sentence: str
 
-# --- 2. THE APP SETUP ---
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Change to your Vercel URL later!
+    allow_origins=["*"], 
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- 3. THE ROUTES (The "Traffic Controller") ---
-
-# HEALTH CHECK (Always keep this! Tells Render you are awake)
 @app.get("/")
 async def health_check():
     return {"status": "AI Server is Online", "projects": ["NPV Analyst", "Concise"]}
@@ -65,12 +59,13 @@ async def grade_sentence(request: GradeRequest):
 async def handle_npv(request: AnalysisRequest):
     try:
         from npv_machine import (
-            text_analysis, 
-            calculate_npv, 
-            calculate_irr, 
-            calculate_pi, 
-            calculate_payback_periods, 
-            get_strategic_advice
+            text_analysis,
+            calculate_npv,
+            calculate_irr,
+            calculate_pi,
+            calculate_payback_periods,
+            get_strategic_advice,
+            validate_cash_flow_data
         )
 
         with open("temp_input.txt", "w") as f:
@@ -79,6 +74,10 @@ async def handle_npv(request: AnalysisRequest):
         data = text_analysis("temp_input.txt")
         if not data:
             raise HTTPException(status_code=400, detail="Could not extract data.")
+
+        validation_error = validate_cash_flow_data(data)
+        if validation_error:
+            raise HTTPException(status_code=422, detail=validation_error)
 
         results = {
             "npv": calculate_npv(data),
@@ -100,6 +99,8 @@ async def handle_npv(request: AnalysisRequest):
             "raw_cash_flows": [cf.model_dump() for cf in data.cash_flows],
             "is_perpetuity": data.is_perpetuity
         }
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"NPV Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -74,6 +74,25 @@ def text_analysis(file_path):
     #Return parsed data
     return response.parsed
 
+def validate_cash_flow_data(data: CashFlowData) -> str | None:
+    """Returns an error message string if data is invalid, else None."""
+    if not data.cash_flows:
+        return "No cash flows could be extracted from the input."
+    
+    # Must have at least one Year 0 negative (investment) or some structure
+    if len(data.cash_flows) < 2:
+        return "Input must describe at least an initial investment and one return period."
+    
+    # Discount rate sanity check
+    if not (0 < data.discount_rate < 1):
+        return f"Extracted discount rate ({data.discount_rate}) is not a valid proportion (must be between 0 and 1)."
+    
+    # All amounts zero is a red flag
+    if all(cf.amount == 0 for cf in data.cash_flows):
+        return "All extracted cash flows are zero — please provide a valid investment scenario."
+    
+    return None  # All good
+
 def calculate_npv(data):
     #Intialize
     total = 0.0

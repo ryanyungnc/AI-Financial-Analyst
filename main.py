@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,15 @@ class GradeRequest(BaseModel):
     problem: Problem
     edited_sentence: str
 
+#Show & Tell class model
+class MonroeRequest(BaseModel):
+    attention: str
+    challenge: str
+    solution: str
+    benefits: str
+    call_to_action: str
+
+
 app = FastAPI()
 
 app.add_middleware(
@@ -32,7 +41,7 @@ app.add_middleware(
 
 @app.get("/")
 async def health_check():
-    return {"status": "AI Server is Online", "projects": ["NPV Analyst", "Concise"]}
+    return {"status": "AI Server is Online", "projects": ["NPV Analyst", "Concise", "Exec File"]}
 
 
 @app.get("/concise/start")
@@ -103,4 +112,17 @@ async def handle_npv(request: AnalysisRequest):
         raise
     except Exception as e:
         print(f"NPV Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/monroe/grade")
+async def generate_feedback(request: MonroeRequest):
+    try:
+        from busi401assignment import give_feedback
+        feedback = give_feedback(request)
+        return feedback
+
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        print(f"Monroe Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
